@@ -8,7 +8,7 @@
     ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs
 
   tasks:
-    - name: ⚠️ DANGER: Wipe partition table and metadata on {{ ceph_osd_disk }}
+    - name: Wipe partition table and metadata on {{ ceph_osd_disk }}
       # This task MUST be run. It ensures the disk is clean and ready for Rook-Ceph.
       # Ceph will fail if disks have remnants of previous filesystems or LVM.
       ansible.builtin.command: sgdisk --zap-all {{ ceph_osd_disk }}
