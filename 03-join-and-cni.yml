@@ -8,24 +8,22 @@
     calico_manifest_url: https://docs.tigera.io/calico/latest/manifests/calico.yaml
 
   tasks:
-    - name: Wait for Kubernetes cluster to be available
-      ansible.builtin.command: kubectl get nodes
-      register: kubectl_check
-      until: kubectl_check.rc == 0
-      retries: 5
-      delay: 5
-      delegate_to: node1
-      run_once: true
+    # --- REMOVED THE FAILING WAIT TASK ---
 
-    - name: Install Calico CNI
+    - name: Install Calico CNI (Delegated to Master)
       ansible.builtin.command: >
         kubectl apply -f {{ calico_manifest_url }}
       delegate_to: node1
       run_once: true
       register: cni_install
       changed_when: cni_install.rc == 0
-      when: inventory_hostname == 'node1'
-      
+      # The CNI must be installed immediately after init for the API server to become ready
+
+    - name: Wait for core DNS and CNI pods to be ready
+      ansible.builtin.command: kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
+      delegate_to: node1
+      run_once: true
+
     - name: Join remaining control plane nodes (node2, node3)
       ansible.builtin.command: "{{ hostvars['node1']['k8s_control_plane_join_command'] }}"
       when:
@@ -38,13 +36,13 @@
     - name: Ensure all worker nodes (including masters) are joinable
       ansible.builtin.command: "{{ hostvars['node1']['k8s_worker_join_command'] }}"
       when:
-        # Re-joining using the worker command is sometimes necessary for hybrid nodes
+        # This re-join is necessary to ensure hybrid nodes are tagged as workers
         - hostvars['node1']['k8s_worker_join_command'] is defined
       register: worker_join_result
       changed_when: worker_join_result.rc == 0
       ignore_errors: yes # Ignore if node is already joined with the same token
 
-    - name: Wait for nodes to be Ready
+    - name: Wait for all nodes to be Ready
       ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=300s
       delegate_to: node1
       run_once: true
