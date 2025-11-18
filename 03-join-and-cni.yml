@@ -8,19 +8,22 @@
     calico_manifest_url: https://docs.tigera.io/calico/latest/manifests/calico.yaml
 
   tasks:
-    # --- REMOVED THE FAILING WAIT TASK ---
-
     - name: Install Calico CNI (Delegated to Master)
+      # Use --kubeconfig to explicitly point to the admin config file.
+      # Added 'retries' and 'delay' because the API server needs a few seconds after init to stabilize.
       ansible.builtin.command: >
-        kubectl apply -f {{ calico_manifest_url }}
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f {{ calico_manifest_url }}
       delegate_to: node1
       run_once: true
       register: cni_install
       changed_when: cni_install.rc == 0
-      # The CNI must be installed immediately after init for the API server to become ready
+      # --- ADDED RETRY/DELAY LOGIC ---
+      retries: 5
+      delay: 5
+      until: cni_install.rc == 0
 
     - name: Wait for core DNS and CNI pods to be ready
-      ansible.builtin.command: kubectl wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
       delegate_to: node1
       run_once: true
 
@@ -43,6 +46,6 @@
       ignore_errors: yes # Ignore if node is already joined with the same token
 
     - name: Wait for all nodes to be Ready
-      ansible.builtin.command: kubectl wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=300s
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=300s
       delegate_to: node1
       run_once: true
