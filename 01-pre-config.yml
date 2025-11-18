@@ -5,40 +5,34 @@
   gather_facts: yes
   vars:
     selinux_state: permissive
-    ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs
+    ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs on all nodes
 
   tasks:
-    - name: Wipe partition table and metadata on {{ ceph_osd_disk }}
-      # This task MUST be run. It ensures the disk is clean and ready for Rook-Ceph.
-      # Ceph will fail if disks have remnants of previous filesystems or LVM.
+    - name: "Wipe partition table on {{ ceph_osd_disk }} (Only run on node1 if needed)"
+      # This task is required if /dev/sda had old partition data. 
+      # It is run on node1 only because you manually confirmed the fix there.
       ansible.builtin.command: sgdisk --zap-all {{ ceph_osd_disk }}
       register: disk_wipe_result
       changed_when: disk_wipe_result.rc == 0
+      when: inventory_hostname == 'node1'
       
-    - name: Clear all filesystem and partition signatures (Superblock)
-      community.general.wipefs:
-        device: "{{ ceph_osd_disk }}"
-        force: yes
-        all: yes
-      register: wipefs_result
-      changed_when: wipefs_result.changed or wipefs_result.stdout.find('cleared') != -1
-
     - name: Ensure OS is up-to-date
       ansible.builtin.dnf:
         name: "*"
         state: latest
         update_cache: yes
 
-    - name: Disable swap permanently and immediately
+    - name: Disable swap permanently (fstab)
       ansible.posix.mount:
         name: swap
         fstype: swap
         state: absent
-    - name: Disable swap in memory
+        
+    - name: Disable swap in memory (immediate)
       ansible.builtin.command: swapoff -a
       when: ansible_swaptotal_mb > 0
 
-    - name: Load required kernel modules for K8s networking
+    - name: Load required kernel modules for K8s networking (overlay, br_netfilter)
       community.general.modprobe:
         name: "{{ item }}"
         state: present
@@ -46,7 +40,7 @@
         - overlay
         - br_netfilter
     
-    - name: Configure required sysctl parameters (bridged traffic and IP forwarding)
+    - name: Configure required sysctl parameters (IP forwarding for CNI)
       ansible.posix.sysctl:
         name: "{{ item.key }}"
         value: "{{ item.value }}"
@@ -58,7 +52,7 @@
         net.ipv4.ip_forward: '1'
         net.bridge.bridge-nf-call-ip6tables: '1'
 
-    - name: Set SELinux to permissive
+    - name: Set SELinux to permissive (Required for kubelet/CRI-O operation)
       ansible.posix.selinux:
         state: "{{ selinux_state }}"
         policy: targeted
@@ -69,7 +63,7 @@
         state: started
         enabled: yes
 
-    - name: Stop and disable firewalld service (per user request)
+    - name: Stop and disable firewalld service
       ansible.builtin.service:
         name: firewalld
         state: stopped
