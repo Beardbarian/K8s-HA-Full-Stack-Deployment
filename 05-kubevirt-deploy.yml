@@ -1,0 +1,44 @@
+---
+- name: 05 - Deploy KubeVirt and CDI
+  hosts: node1
+  become: no
+  gather_facts: no
+  vars:
+    kubevirt_version: v1.2.0
+    cdi_version: v1.59.0
+
+  tasks:
+    - name: Apply KubeVirt Operator manifest
+      kubernetes.core.k8s:
+        state: present
+        name: kubevirt-operator
+        src: "https://github.com/kubevirt/kubevirt/releases/download/{{ kubevirt_version }}/kubevirt-operator.yaml"
+
+    - name: Apply KubeVirt CRD to start components
+      kubernetes.core.k8s:
+        state: present
+        src: "https://github.com/kubevirt/kubevirt/releases/download/{{ kubevirt_version }}/kubevirt-cr.yaml"
+    
+    - name: Wait for KubeVirt components to be ready
+      kubernetes.core.k8s_info:
+        api_version: kubevirt.io/v1
+        kind: KubeVirt
+        name: kubevirt
+        namespace: kubevirt
+        field_selectors:
+          - status.phase=Deployed
+      register: kubevirt_status
+      until: kubevirt_status.resources | default([]) | length > 0
+      retries: 20
+      delay: 10
+      
+    - name: Apply CDI Operator manifest
+      kubernetes.core.k8s:
+        state: present
+        name: cdi-operator
+        src: "https://github.com/kubevirt/containerized-data-importer/releases/download/{{ cdi_version }}/cdi-operator.yaml"
+
+    - name: Apply CDI CRD to start components
+      kubernetes.core.k8s:
+        state: present
+        src: "https://github.com/kubevirt/containerized-data-importer/releases/download/{{ cdi_version }}/cdi-cr.yaml"
