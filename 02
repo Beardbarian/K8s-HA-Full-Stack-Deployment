@@ -1,0 +1,71 @@
+---
+- name: 02 - Initialize Kubernetes Control Plane on node1
+  hosts: node1 # Explicitly target node1 as the starting master
+  become: yes
+  gather_facts: no
+  vars:
+    # The IP address of the node running kubeadm init (node1's IP)
+    advertise_address: 10.6.4.120
+    # Define a high-availability endpoint (VIP or Load Balancer) for the masters
+    # Since you don't have a dedicated LB, we'll use node1's IP for now,
+    # but in a production HA cluster, this MUST be a virtual IP (VIP)
+    control_plane_endpoint: 10.6.4.120:6443 
+    pod_network_cidr: 192.168.0.0/16 # Used for Calico CNI in next step
+
+  tasks:
+    - name: Initialize the Kubernetes Cluster
+      ansible.builtin.command: >
+        kubeadm init 
+          --apiserver-advertise-address={{ advertise_address }}
+          --control-plane-endpoint={{ control_plane_endpoint }}
+          --pod-network-cidr={{ pod_network_cidr }}
+          --upload-certs
+          --cri-socket unix:///var/run/crio/crio.sock
+      register: kubeadm_init_result
+      args:
+        # Use creates to prevent running init again if it's already done
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory for user
+      ansible.builtin.file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0700'
+      when: kubeadm_init_result.changed
+
+    - name: Copy admin.conf to user's .kube directory
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        remote_src: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      when: kubeadm_init_result.changed
+    
+    - name: Get kubeadm join command for control-plane nodes
+      ansible.builtin.command: >
+        kubeadm token create --print-join-command
+          --certificate-key-if-needed
+      register: control_plane_join_command
+      delegate_to: node1 # Always run on the master
+      run_once: true
+
+    - name: Get kubeadm join command for worker nodes
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: worker_join_command
+      delegate_to: node1
+      run_once: true
+    
+    - name: Set fact for the join commands
+      ansible.builtin.set_fact:
+        k8s_control_plane_join_command: "{{ control_plane_join_command.stdout }}"
+        k8s_worker_join_command: "{{ worker_join_command.stdout }}"
+
+    - name: Print Join Commands (for next playbook)
+      ansible.builtin.debug:
+        msg: |
+          Control Plane Join Command: {{ k8s_control_plane_join_command }}
+          Worker Join Command: {{ k8s_worker_join_command }}
