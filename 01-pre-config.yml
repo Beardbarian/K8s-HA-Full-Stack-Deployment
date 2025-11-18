@@ -1,0 +1,67 @@
+---
+- name: 01 - Node Pre-Configuration for Kubernetes
+  hosts: awx_target
+  become: yes
+  gather_facts: yes
+  vars:
+    # Set SELinux to permissive for CRI-O/Kubelet compatibility
+    selinux_state: permissive
+    # The Kubernetes API Server port, often used by load balancers
+    apiserver_port: 6443
+
+  tasks:
+    - name: Ensure OS is up-to-date
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+
+    - name: Disable swap permanently and immediately
+      ansible.posix.mount:
+        name: swap
+        fstype: swap
+        state: absent
+      # Disable swap in memory as well
+    - name: Disable swap in memory
+      ansible.builtin.command: swapoff -a
+      when: ansible_swaptotal_mb > 0
+
+    - name: Load required kernel modules for K8s networking
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - overlay
+        - br_netfilter
+    
+    - name: Configure required sysctl parameters (bridged traffic and IP forwarding)
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/99-kubernetes.conf
+        reload: yes
+      with_dict:
+        net.bridge.bridge-nf-call-iptables: '1'
+        net.ipv4.ip_forward: '1'
+        net.bridge.bridge-nf-call-ip6tables: '1'
+
+    - name: Set SELinux to permissive
+      ansible.posix.selinux:
+        state: "{{ selinux_state }}"
+        policy: targeted
+      # Temporarily disabling SELinux checks simplifies deployment. Re-enable after K8s setup if needed.
+
+    - name: Enable and start CRI-O
+      ansible.builtin.service:
+        name: crio
+        state: started
+        enabled: yes
+
+    # --- Firewall Disabled ---
+    - name: Stop and disable firewalld service (per user request)
+      ansible.builtin.service:
+        name: firewalld
+        state: stopped
+        enabled: no
+      ignore_errors: yes # Allows playbook to proceed if firewalld is not installed
