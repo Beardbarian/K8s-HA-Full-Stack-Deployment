@@ -1,0 +1,82 @@
+---
+- name: 04 - Deploy Rook-Ceph Operator and Cluster
+  hosts: node1
+  become: no # kubectl commands are run as the AWX user who has the kubeconfig
+  gather_facts: no
+  vars:
+    rook_ceph_repo: https://raw.githubusercontent.com/rook/rook/release-1.14/
+    # If you have specific disks, list them here. Otherwise, Rook uses all available.
+    osd_disks: "all" 
+
+  tasks:
+    - name: Create the rook-ceph namespace
+      kubernetes.core.k8s:
+        name: rook-ceph
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Apply common Rook manifests
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/common.yaml"
+
+    - name: Apply Rook operator manifest
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/operator.yaml"
+    
+    - name: Wait for Rook Operator to be available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: rook-ceph-operator
+        namespace: rook-ceph
+        field_selectors:
+          - status.readyReplicas=1
+      register: rook_operator_status
+      until: rook_operator_status.resources | default([]) | length > 0
+      retries: 15
+      delay: 10
+
+    - name: Create temporary file for Ceph Cluster manifest
+      ansible.builtin.tempfile:
+        state: file
+        suffix: ceph-cluster
+      register: temp_cluster_manifest
+      run_once: true
+
+    - name: Deploy Ceph Cluster CRD
+      ansible.builtin.template:
+        src: cluster-manifest.j2
+        dest: "{{ temp_cluster_manifest.path }}"
+      run_once: true
+      vars:
+        ceph_use_all_nodes: true
+        ceph_use_all_devices: "{{ osd_disks == 'all' }}"
+        ceph_specific_devices: "{{ osd_disks if osd_disks != 'all' else [] }}"
+
+    - name: Apply Ceph Cluster CRD
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ temp_cluster_manifest.path }}"
+    
+    - name: Apply Ceph Filesystem/StorageClass
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/csi/rbd/storageclass.yaml"
+
+    - name: Apply Ceph Block Pool
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/pool.yaml"
+
+    - name: Wait for rook-ceph-block StorageClass to be ready
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: rook-ceph-block
+      register: sc_check
+      until: sc_check.resources | default([]) | length > 0
+      retries: 15
+      delay: 5
