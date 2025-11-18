@@ -4,12 +4,25 @@
   become: yes
   gather_facts: yes
   vars:
-    # Set SELinux to permissive for CRI-O/Kubelet compatibility
     selinux_state: permissive
-    # The Kubernetes API Server port, often used by load balancers
-    apiserver_port: 6443
+    ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs
 
   tasks:
+    - name: ⚠️ DANGER: Wipe partition table and metadata on {{ ceph_osd_disk }}
+      # This task MUST be run. It ensures the disk is clean and ready for Rook-Ceph.
+      # Ceph will fail if disks have remnants of previous filesystems or LVM.
+      ansible.builtin.command: sgdisk --zap-all {{ ceph_osd_disk }}
+      register: disk_wipe_result
+      changed_when: disk_wipe_result.rc == 0
+      
+    - name: Clear all filesystem and partition signatures (Superblock)
+      community.general.wipefs:
+        device: "{{ ceph_osd_disk }}"
+        force: yes
+        all: yes
+      register: wipefs_result
+      changed_when: wipefs_result.changed or wipefs_result.stdout.find('cleared') != -1
+
     - name: Ensure OS is up-to-date
       ansible.builtin.dnf:
         name: "*"
@@ -21,7 +34,6 @@
         name: swap
         fstype: swap
         state: absent
-      # Disable swap in memory as well
     - name: Disable swap in memory
       ansible.builtin.command: swapoff -a
       when: ansible_swaptotal_mb > 0
@@ -50,7 +62,6 @@
       ansible.posix.selinux:
         state: "{{ selinux_state }}"
         policy: targeted
-      # Temporarily disabling SELinux checks simplifies deployment. Re-enable after K8s setup if needed.
 
     - name: Enable and start CRI-O
       ansible.builtin.service:
@@ -58,10 +69,9 @@
         state: started
         enabled: yes
 
-    # --- Firewall Disabled ---
     - name: Stop and disable firewalld service (per user request)
       ansible.builtin.service:
         name: firewalld
         state: stopped
         enabled: no
-      ignore_errors: yes # Allows playbook to proceed if firewalld is not installed
+      ignore_errors: yes
