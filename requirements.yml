@@ -1,0 +1,5 @@
+---
+collections:
+  - name: community.general
+  - name: kubernetes.core # Needed for later playbooks (k8s module)
+  - name: ansible.posix # Needed for sysctl and mount modules
