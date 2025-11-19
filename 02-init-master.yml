@@ -21,14 +21,11 @@
           --cri-socket unix:///var/run/crio/crio.sock
       register: kubeadm_init_result
       args:
-        # Prevents running init again if it's already done
         creates: /etc/kubernetes/admin.conf
-
-    - name: "CRITICAL FIX: Restart Kubelet Service after init"
-      ansible.builtin.service:
-        name: kubelet
-        state: restarted
-      when: kubeadm_init_result.changed
+      # --- CRITICAL CHANGE: Notify handler on first successful run ---
+      notify: Restart Kubelet
+      
+    # --- THIS TASK WAS REMOVED: The handler replaces it. ---
 
     - name: Create .kube directory for user
       ansible.builtin.file:
@@ -49,7 +46,7 @@
         mode: '0600'
       when: kubeadm_init_result.changed
     
-    # --- Commands to retrieve join keys (already fixed in previous steps) ---
+    # --- Remaining key retrieval tasks follow (no change needed) ---
     - name: Retrieve the certificate key for HA joins
       ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
       register: cert_key_output
@@ -76,3 +73,10 @@
         msg: |
           Control Plane Join Command: {{ k8s_control_plane_join_command }}
           Worker Join Command: {{ k8s_worker_join_command }}
+
+  handlers:
+    - name: Restart Kubelet
+      # This handler runs only if the kubeadm init task reports 'changed'
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
