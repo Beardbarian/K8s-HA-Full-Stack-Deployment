@@ -64,8 +64,9 @@
     # --- STEP 1: Create Local Variables (for this playbook) ---
     - name: Generate Join Commands as Facts
       ansible.builtin.set_fact:
-        k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
-        k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }}"
+        # CRITICAL FIX: Removed "sha256:" prefix because the regex already captures it.
+        k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash {{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
+        k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash {{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }}"
 
     # --- STEP 2: Persist Variables (for the NEXT playbook in workflow) ---
     - name: Persist Join Commands to Workflow Stats
