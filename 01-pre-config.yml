@@ -5,7 +5,7 @@
   gather_facts: yes
   vars:
     selinux_state: permissive
-    ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs on all nodes
+    ceph_osd_disk: /dev/sda 
 
   tasks:
     - name: Ensure all nodes can resolve each other by IP and hostname
@@ -29,12 +29,17 @@
         state: latest
         update_cache: yes
 
-    # --- CRITICAL FIX: Install Python Kubernetes library for Ansible modules ---
-    - name: Install Python Kubernetes library (Required for community.kubernetes modules)
+    # --- CRITICAL FIX: Install PIP and then the Kubernetes Library ---
+    - name: Install python3-pip
       ansible.builtin.dnf:
-        name: python3-kubernetes
+        name: python3-pip
         state: present
-    # ---------------------------------------------------------------------------
+
+    - name: Install Kubernetes Python library via pip
+      ansible.builtin.pip:
+        name: kubernetes
+        state: present
+    # -----------------------------------------------------------------
 
     - name: Disable swap permanently (fstab)
       ansible.posix.mount:
