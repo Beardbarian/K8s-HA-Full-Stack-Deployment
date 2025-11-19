@@ -15,7 +15,14 @@
         kind: Namespace
         state: present
 
-    - name: Apply common Rook manifests (CRDs, etc.)
+    # --- CRITICAL FIX: Apply CRDs first (Required for Rook 1.14+) ---
+    - name: Apply Rook Custom Resource Definitions (CRDs)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ rook_ceph_base_url }}/crds.yaml"
+    # ----------------------------------------------------------------
+
+    - name: Apply common Rook manifests (RBAC, etc.)
       kubernetes.core.k8s:
         state: present
         src: "{{ rook_ceph_base_url }}/common.yaml"
@@ -46,12 +53,11 @@
       retries: 30
       delay: 10
 
-    # --- CRITICAL FIX: Wait for CRD to be established ---
+    # --- Wait for CRD to be established ---
     - name: Wait for CephCluster CRD to be established
       ansible.builtin.command: kubectl wait --for=condition=established crd/cephclusters.ceph.rook.io --timeout=60s
       changed_when: false
-    # ---------------------------------------------------
-
+    
     - name: Create temporary file for Ceph Cluster manifest
       ansible.builtin.tempfile:
         state: file
