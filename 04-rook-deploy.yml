@@ -25,13 +25,12 @@
         state: present
         src: "{{ rook_ceph_base_url }}/operator.yaml"
 
-    # --- CRITICAL FIX: Patch Operator to run on Control Plane nodes ---
+    # --- Patch Operator to run on Control Plane nodes ---
     - name: Patch Rook Operator to tolerate Control Plane taints
       ansible.builtin.command: >
         kubectl -n rook-ceph patch deployment rook-ceph-operator --patch '{"spec": {"template": {"spec": {"tolerations": [{"key": "node-role.kubernetes.io/control-plane", "operator": "Exists", "effect": "NoSchedule"}, {"key": "node-role.kubernetes.io/master", "operator": "Exists", "effect": "NoSchedule"}]}}}}'
       register: patch_result
       changed_when: patch_result.rc == 0
-    # ------------------------------------------------------------------
     
     - name: Wait for Rook Operator to be available
       kubernetes.core.k8s_info:
@@ -46,6 +45,12 @@
         - rook_operator_status.resources[0].status.readyReplicas | default(0) >= 1
       retries: 30
       delay: 10
+
+    # --- CRITICAL FIX: Wait for CRD to be established ---
+    - name: Wait for CephCluster CRD to be established
+      ansible.builtin.command: kubectl wait --for=condition=established crd/cephclusters.ceph.rook.io --timeout=60s
+      changed_when: false
+    # ---------------------------------------------------
 
     - name: Create temporary file for Ceph Cluster manifest
       ansible.builtin.tempfile:
