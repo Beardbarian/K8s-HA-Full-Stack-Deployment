@@ -75,7 +75,8 @@
 
     - name: Construct Join Command
       ansible.builtin.set_fact:
-        join_command_str: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
+        # CRITICAL FIX: Removed "sha256:" manual prefix. The regex extract includes it.
+        join_command_str: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash {{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
       run_once: true
       delegate_to: node1
 
