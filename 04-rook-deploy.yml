@@ -1,13 +1,14 @@
 ---
 - name: 04 - Deploy Rook-Ceph Operator and Cluster
   hosts: node1
-  become: no # kubectl commands are run as the AWX user who has the kubeconfig
+  become: no
   gather_facts: no
   vars:
-    rook_ceph_repo: https://raw.githubusercontent.com/rook/rook/release-1.14/
-    # If you have specific disks, list them here. Otherwise, Rook uses all available.
-    osd_disks: "all" 
-
+    # Updated URL base to point to the deploy/examples directory directly if needed, 
+    # but keeping the root release branch URL is cleaner if we fix the subpaths.
+    # Valid path for 1.14 is: deploy/examples/common.yaml
+    rook_ceph_base_url: https://raw.githubusercontent.com/rook/rook/release-1.14/deploy/examples
+    
   tasks:
     - name: Create the rook-ceph namespace
       kubernetes.core.k8s:
@@ -16,15 +17,15 @@
         kind: Namespace
         state: present
 
-    - name: Apply common Rook manifests
+    - name: Apply common Rook manifests (CRDs, etc.)
       kubernetes.core.k8s:
         state: present
-        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/common.yaml"
+        src: "{{ rook_ceph_base_url }}/common.yaml"
 
     - name: Apply Rook operator manifest
       kubernetes.core.k8s:
         state: present
-        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/operator.yaml"
+        src: "{{ rook_ceph_base_url }}/operator.yaml"
     
     - name: Wait for Rook Operator to be available
       kubernetes.core.k8s_info:
@@ -32,11 +33,12 @@
         kind: Deployment
         name: rook-ceph-operator
         namespace: rook-ceph
-        field_selectors:
-          - status.readyReplicas=1
       register: rook_operator_status
-      until: rook_operator_status.resources | default([]) | length > 0
-      retries: 15
+      until: 
+        - rook_operator_status.resources is defined
+        - rook_operator_status.resources | length > 0
+        - rook_operator_status.resources[0].status.readyReplicas | default(0) >= 1
+      retries: 30
       delay: 10
 
     - name: Create temporary file for Ceph Cluster manifest
@@ -46,30 +48,32 @@
       register: temp_cluster_manifest
       run_once: true
 
-    - name: Deploy Ceph Cluster CRD
+    # This uses the cluster-manifest.j2 template you already have.
+    # Ensure that template uses the specific /dev/sda devices as we configured earlier.
+    - name: Deploy Ceph Cluster CRD from Template
       ansible.builtin.template:
         src: cluster-manifest.j2
         dest: "{{ temp_cluster_manifest.path }}"
       run_once: true
       vars:
         ceph_use_all_nodes: true
-        ceph_use_all_devices: "{{ osd_disks == 'all' }}"
-        ceph_specific_devices: "{{ osd_disks if osd_disks != 'all' else [] }}"
+        # These vars are used inside the Jinja2 template
+        ceph_use_all_devices: false 
 
     - name: Apply Ceph Cluster CRD
       kubernetes.core.k8s:
         state: present
         src: "{{ temp_cluster_manifest.path }}"
     
-    - name: Apply Ceph Filesystem/StorageClass
+    # Note: The toolbox, storageclass, and filesystem are usually in subdirectories.
+    # For 1.14, these are often just separate files or in csi/rbd.
+    # Let's use the direct URLs for the default Block Storage Class.
+    
+    - name: Apply Ceph Block Pool and StorageClass
       kubernetes.core.k8s:
         state: present
-        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/csi/rbd/storageclass.yaml"
-
-    - name: Apply Ceph Block Pool
-      kubernetes.core.k8s:
-        state: present
-        src: "{{ rook_ceph_repo }}cluster/examples/kubernetes/ceph/pool.yaml"
+        # This is the default example storageclass from the Rook repo
+        src: "{{ rook_ceph_base_url }}/csi/rbd/storageclass.yaml"
 
     - name: Wait for rook-ceph-block StorageClass to be ready
       kubernetes.core.k8s_info:
@@ -77,6 +81,8 @@
         kind: StorageClass
         name: rook-ceph-block
       register: sc_check
-      until: sc_check.resources | default([]) | length > 0
+      until: 
+        - sc_check.resources is defined
+        - sc_check.resources | length > 0
       retries: 15
       delay: 5
