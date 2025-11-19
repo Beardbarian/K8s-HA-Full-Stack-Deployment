@@ -62,15 +62,12 @@
       run_once: true
 
     - name: Generate and Persist Join Commands
-      # --- CRITICAL CHANGE: Use set_stats to pass variables to the next job ---
+      # --- CRITICAL CHANGE: Removed invalid 'prefix' option ---
       ansible.builtin.set_stats:
         data:
+          # The variable names already include the 'k8s_' prefix we want
           k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
-          k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
-        # Set the prefix to allow access via hostvars['node1']
-        prefix: k8s_
-      # NOTE: set_stats variables are accessed as hostvars['node1']['k8s_k8s_control_plane_join_command']
-      # We need to adjust the access later if necessary, but the variable is now persistent.
+          k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }}"
 
     - name: Print Join Commands (for next playbook)
       ansible.builtin.debug:
