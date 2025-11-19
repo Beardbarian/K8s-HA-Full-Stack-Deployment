@@ -4,9 +4,7 @@
   become: no
   gather_facts: no
   vars:
-    # Updated URL base to point to the deploy/examples directory directly if needed, 
-    # but keeping the root release branch URL is cleaner if we fix the subpaths.
-    # Valid path for 1.14 is: deploy/examples/common.yaml
+    # Use the deploy/examples directory for 1.14+
     rook_ceph_base_url: https://raw.githubusercontent.com/rook/rook/release-1.14/deploy/examples
     
   tasks:
@@ -26,6 +24,14 @@
       kubernetes.core.k8s:
         state: present
         src: "{{ rook_ceph_base_url }}/operator.yaml"
+
+    # --- CRITICAL FIX: Patch Operator to run on Control Plane nodes ---
+    - name: Patch Rook Operator to tolerate Control Plane taints
+      ansible.builtin.command: >
+        kubectl -n rook-ceph patch deployment rook-ceph-operator --patch '{"spec": {"template": {"spec": {"tolerations": [{"key": "node-role.kubernetes.io/control-plane", "operator": "Exists", "effect": "NoSchedule"}, {"key": "node-role.kubernetes.io/master", "operator": "Exists", "effect": "NoSchedule"}]}}}}'
+      register: patch_result
+      changed_when: patch_result.rc == 0
+    # ------------------------------------------------------------------
     
     - name: Wait for Rook Operator to be available
       kubernetes.core.k8s_info:
@@ -48,8 +54,6 @@
       register: temp_cluster_manifest
       run_once: true
 
-    # This uses the cluster-manifest.j2 template you already have.
-    # Ensure that template uses the specific /dev/sda devices as we configured earlier.
     - name: Deploy Ceph Cluster CRD from Template
       ansible.builtin.template:
         src: cluster-manifest.j2
@@ -57,7 +61,6 @@
       run_once: true
       vars:
         ceph_use_all_nodes: true
-        # These vars are used inside the Jinja2 template
         ceph_use_all_devices: false 
 
     - name: Apply Ceph Cluster CRD
@@ -65,14 +68,9 @@
         state: present
         src: "{{ temp_cluster_manifest.path }}"
     
-    # Note: The toolbox, storageclass, and filesystem are usually in subdirectories.
-    # For 1.14, these are often just separate files or in csi/rbd.
-    # Let's use the direct URLs for the default Block Storage Class.
-    
     - name: Apply Ceph Block Pool and StorageClass
       kubernetes.core.k8s:
         state: present
-        # This is the default example storageclass from the Rook repo
         src: "{{ rook_ceph_base_url }}/csi/rbd/storageclass.yaml"
 
     - name: Wait for rook-ceph-block StorageClass to be ready
