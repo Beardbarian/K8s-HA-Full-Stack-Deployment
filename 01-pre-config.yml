@@ -8,13 +8,25 @@
     ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs on all nodes
 
   tasks:
-    - name: "Wipe partition table on {{ ceph_osd_disk }} (Only run on node1 if needed)"
-      # This task is required if /dev/sda had old partition data. 
-      # It is run on node1 only because you manually confirmed the fix there.
+    # --- CRITICAL FIX: Add host entries to /etc/hosts on all nodes ---
+    - name: Ensure all nodes can resolve each other by IP and hostname
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item].ansible_host }} {{ item }}"
+        state: present
+      # Use the 'all' group to iterate over all hosts in the inventory
+      loop: "{{ groups['all'] }}"
+      loop_control:
+        label: "{{ item }}"
+      # --- END CRITICAL FIX ---
+
+    - name: "Wipe partition table on {{ ceph_osd_disk }} (Unconditional Cleanup)"
+      # This task runs on all nodes to ensure /dev/sda is clean for Ceph.
       ansible.builtin.command: sgdisk --zap-all {{ ceph_osd_disk }}
       register: disk_wipe_result
       changed_when: disk_wipe_result.rc == 0
-      when: inventory_hostname == 'node1'
+      # --- CRITICAL CHANGE: Run unconditionally on all nodes and ignore errors ---
+      ignore_errors: yes
       
     - name: Ensure OS is up-to-date
       ansible.builtin.dnf:
