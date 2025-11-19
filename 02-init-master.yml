@@ -21,11 +21,15 @@
           --cri-socket unix:///var/run/crio/crio.sock
       register: kubeadm_init_result
       args:
+        # Prevents running init again if it's already done
         creates: /etc/kubernetes/admin.conf
-      # --- CRITICAL CHANGE: Notify handler on first successful run ---
-      notify: Restart Kubelet
       
-    # --- THIS TASK WAS REMOVED: The handler replaces it. ---
+    - name: "CRITICAL FIX: Restart Kubelet Service for API stability"
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
+      # --- CRITICAL CHANGE: Always run this task ---
+      when: true
 
     - name: Create .kube directory for user
       ansible.builtin.file:
@@ -66,17 +70,10 @@
     - name: Generate full kubeadm join command for control-plane nodes
       ansible.builtin.set_fact:
         k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
-        k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }}"
+        k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
 
     - name: Print Join Commands (for next playbook)
       ansible.builtin.debug:
         msg: |
           Control Plane Join Command: {{ k8s_control_plane_join_command }}
           Worker Join Command: {{ k8s_worker_join_command }}
-
-  handlers:
-    - name: Restart Kubelet
-      # This handler runs only if the kubeadm init task reports 'changed'
-      ansible.builtin.service:
-        name: kubelet
-        state: restarted
