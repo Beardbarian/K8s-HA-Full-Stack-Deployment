@@ -9,41 +9,41 @@
 
   tasks:
     - name: Install Calico CNI (Delegated to Master)
-      # Use --kubeconfig to explicitly point to the admin config file.
-      # Added 'retries' and 'delay' because the API server needs a few seconds after init to stabilize.
+      # This task is succeeding and does not need modification.
       ansible.builtin.command: >
         kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f {{ calico_manifest_url }}
       delegate_to: node1
       run_once: true
       register: cni_install
       changed_when: cni_install.rc == 0
-      # --- ADDED RETRY/DELAY LOGIC ---
       retries: 5
       delay: 5
       until: cni_install.rc == 0
 
     - name: Wait for core DNS and CNI pods to be ready
+      # This task is succeeding and does not need modification.
       ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
       delegate_to: node1
       run_once: true
 
     - name: Join remaining control plane nodes (node2, node3)
+      # --- CRITICAL FIX: Only skip node1, force execution on node2 & node3. ---
       ansible.builtin.command: "{{ hostvars['node1']['k8s_control_plane_join_command'] }}"
       when:
         - inventory_hostname != 'node1'
-        - inventory_hostname in groups['k8s_control_plane']
-        - hostvars['node1']['k8s_control_plane_join_command'] is defined
+        # This simple check ensures the command runs on node2 and node3.
       register: join_result
       changed_when: join_result.rc == 0
       
     - name: Ensure all worker nodes (including masters) are joinable
+      # This task ensures the nodes have the correct labels/setup as workers
       ansible.builtin.command: "{{ hostvars['node1']['k8s_worker_join_command'] }}"
       when:
-        # This re-join is necessary to ensure hybrid nodes are tagged as workers
         - hostvars['node1']['k8s_worker_join_command'] is defined
+        - inventory_hostname in groups['k8s_workers']
       register: worker_join_result
       changed_when: worker_join_result.rc == 0
-      ignore_errors: yes # Ignore if node is already joined with the same token
+      ignore_errors: yes
 
     - name: Wait for all nodes to be Ready
       ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=300s
