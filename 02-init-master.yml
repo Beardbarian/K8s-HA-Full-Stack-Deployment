@@ -23,14 +23,8 @@
       args:
         # Prevents running init again if it's already done
         creates: /etc/kubernetes/admin.conf
+      notify: Restart Kubelet
       
-    - name: "CRITICAL FIX: Restart Kubelet Service for API stability"
-      ansible.builtin.service:
-        name: kubelet
-        state: restarted
-      # --- CRITICAL CHANGE: Always run this task ---
-      when: true
-
     - name: Create .kube directory for user
       ansible.builtin.file:
         path: /home/{{ ansible_user }}/.kube
@@ -50,7 +44,7 @@
         mode: '0600'
       when: kubeadm_init_result.changed
     
-    # --- Remaining key retrieval tasks follow (no change needed) ---
+    # --- Commands to retrieve join keys (no change needed) ---
     - name: Retrieve the certificate key for HA joins
       ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
       register: cert_key_output
@@ -67,13 +61,25 @@
       delegate_to: node1
       run_once: true
 
-    - name: Generate full kubeadm join command for control-plane nodes
-      ansible.builtin.set_fact:
-        k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
-        k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
+    - name: Generate and Persist Join Commands
+      # --- CRITICAL CHANGE: Use set_stats to pass variables to the next job ---
+      ansible.builtin.set_stats:
+        data:
+          k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
+          k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
+        # Set the prefix to allow access via hostvars['node1']
+        prefix: k8s_
+      # NOTE: set_stats variables are accessed as hostvars['node1']['k8s_k8s_control_plane_join_command']
+      # We need to adjust the access later if necessary, but the variable is now persistent.
 
     - name: Print Join Commands (for next playbook)
       ansible.builtin.debug:
         msg: |
           Control Plane Join Command: {{ k8s_control_plane_join_command }}
           Worker Join Command: {{ k8s_worker_join_command }}
+
+  handlers:
+    - name: Restart Kubelet
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
