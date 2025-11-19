@@ -1,0 +1,110 @@
+---
+- name: 02 - Initialize Master and Join Workers
+  hosts: k8s_cluster
+  become: yes
+  gather_facts: yes
+  vars:
+    advertise_address: 10.6.4.120
+    control_plane_endpoint: 10.6.4.120:6443
+    pod_network_cidr: 192.168.0.0/16
+    calico_manifest_url: https://docs.tigera.io/calico/latest/manifests/calico.yaml
+
+  tasks:
+    # --- SECTION 1: Master Initialization (Runs only on node1) ---
+    - name: Initialize the Kubernetes Cluster
+      ansible.builtin.command: >
+        kubeadm init
+          --apiserver-advertise-address={{ advertise_address }}
+          --control-plane-endpoint={{ control_plane_endpoint }}
+          --pod-network-cidr={{ pod_network_cidr }}
+          --upload-certs
+          --cri-socket unix:///var/run/crio/crio.sock
+      register: kubeadm_init_result
+      run_once: true
+      delegate_to: node1
+      args:
+        creates: /etc/kubernetes/admin.conf
+      notify: Restart Kubelet
+
+    - name: "CRITICAL FIX: Restart Kubelet Service (Unconditional)"
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
+      run_once: true
+      delegate_to: node1
+
+    - name: Create .kube directory for user on Master
+      ansible.builtin.file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0700'
+      run_once: true
+      delegate_to: node1
+
+    - name: Copy admin.conf to user's .kube directory
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/{{ ansible_user }}/.kube/config
+        remote_src: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+      run_once: true
+      delegate_to: node1
+
+    # --- SECTION 2: Generate Join Tokens (Runs only on node1) ---
+    - name: Retrieve the certificate key
+      ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
+      register: cert_key_output
+      run_once: true
+      delegate_to: node1
+
+    - name: Create new token
+      ansible.builtin.command: kubeadm token create
+      register: kube_token
+      run_once: true
+      delegate_to: node1
+
+    - name: Capture Certificate Key
+      ansible.builtin.set_fact:
+        k8s_cert_key: "{{ cert_key_output.stdout | regex_search('\\b[0-9a-f]{64}\\b') }}"
+      run_once: true
+      delegate_to: node1
+
+    - name: Construct Join Command
+      ansible.builtin.set_fact:
+        join_command_str: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
+      run_once: true
+      delegate_to: node1
+
+    # --- SECTION 3: CNI Installation (Runs only on node1) ---
+    - name: Install Calico CNI
+      ansible.builtin.command: >
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f {{ calico_manifest_url }}
+      run_once: true
+      delegate_to: node1
+      register: cni_install
+      retries: 10
+      delay: 10
+      until: cni_install.rc == 0
+
+    # --- SECTION 4: Join Other Nodes (Runs on node2 and node3) ---
+    - name: Join node to cluster
+      ansible.builtin.command: "{{ hostvars['node1']['join_command_str'] }}"
+      when: inventory_hostname != 'node1'
+      register: join_result
+      until: join_result.rc == 0
+      retries: 10
+      delay: 5
+      # This prevents the task from failing if the node is already joined
+      failed_when: 
+        - join_result.rc != 0 
+        - "'already exists' not in join_result.stderr"
+
+  handlers:
+    - name: Restart Kubelet
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
