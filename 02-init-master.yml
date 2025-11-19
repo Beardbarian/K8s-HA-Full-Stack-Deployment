@@ -7,7 +7,6 @@
     # The IP address of the node running kubeadm init (node1's IP)
     advertise_address: 10.6.4.120
     # Define a high-availability endpoint (VIP or Load Balancer) for the masters
-    # NOTE: Using node1's IP temporarily; should be a VIP for production HA.
     control_plane_endpoint: 10.6.4.120:6443 
     pod_network_cidr: 192.168.0.0/16 
 
@@ -24,7 +23,12 @@
       args:
         # Prevents running init again if it's already done
         creates: /etc/kubernetes/admin.conf
-      # The cluster MUST be initialized successfully before proceeding.
+
+    - name: "CRITICAL FIX: Restart Kubelet Service after init"
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
+      when: kubeadm_init_result.changed
 
     - name: Create .kube directory for user
       ansible.builtin.file:
@@ -45,7 +49,7 @@
         mode: '0600'
       when: kubeadm_init_result.changed
     
-    # --- FIX 1: Retrieve the certificate key separately ---
+    # --- Commands to retrieve join keys (already fixed in previous steps) ---
     - name: Retrieve the certificate key for HA joins
       ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
       register: cert_key_output
@@ -56,7 +60,6 @@
       ansible.builtin.set_fact:
         k8s_cert_key: "{{ cert_key_output.stdout | regex_search('\\b[0-9a-f]{64}\\b') }}"
 
-    # --- FIX 2: Retrieve the token separately and use simple print ---
     - name: Create new token for joining nodes
       ansible.builtin.command: kubeadm token create
       register: kube_token
