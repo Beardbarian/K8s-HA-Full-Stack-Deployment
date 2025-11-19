@@ -1,88 +1,54 @@
 ---
-- name: 02 - Initialize Kubernetes Control Plane on node1
-  hosts: node1 # Explicitly target node1 as the starting master
+- name: 03 - Join Nodes and Install CNI
+  hosts: k8s_cluster
   become: yes
   gather_facts: no
   vars:
-    # The IP address of the node running kubeadm init (node1's IP)
-    advertise_address: 10.6.4.120
-    # Define a high-availability endpoint (VIP or Load Balancer) for the masters
-    control_plane_endpoint: 10.6.4.120:6443 
-    pod_network_cidr: 192.168.0.0/16 
+    # Calico CNI manifest URL
+    calico_manifest_url: https://docs.tigera.io/calico/latest/manifests/calico.yaml
 
   tasks:
-    - name: Initialize the Kubernetes Cluster
+    - name: Install Calico CNI (Delegated to Master)
+      # This task is succeeding and does not need modification.
       ansible.builtin.command: >
-        kubeadm init 
-          --apiserver-advertise-address={{ advertise_address }}
-          --control-plane-endpoint={{ control_plane_endpoint }}
-          --pod-network-cidr={{ pod_network_cidr }}
-          --upload-certs
-          --cri-socket unix:///var/run/crio/crio.sock
-      register: kubeadm_init_result
-      args:
-        # Prevents running init again if it's already done
-        creates: /etc/kubernetes/admin.conf
-      notify: Restart Kubelet
-      
-    - name: Create .kube directory for user
-      ansible.builtin.file:
-        path: /home/{{ ansible_user }}/.kube
-        state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0700'
-      when: kubeadm_init_result.changed
-
-    - name: Copy admin.conf to user's .kube directory
-      ansible.builtin.copy:
-        src: /etc/kubernetes/admin.conf
-        dest: /home/{{ ansible_user }}/.kube/config
-        remote_src: yes
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0600'
-      when: kubeadm_init_result.changed
-    
-    # --- Commands to retrieve join keys (no change needed) ---
-    - name: Retrieve the certificate key for HA joins
-      ansible.builtin.command: kubeadm init phase upload-certs --upload-certs
-      register: cert_key_output
-      delegate_to: node1 
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f {{ calico_manifest_url }}
+      delegate_to: node1
       run_once: true
+      register: cni_install
+      changed_when: cni_install.rc == 0
+      retries: 10
+      delay: 10
+      until: cni_install.rc == 0
 
-    - name: Extract certificate key
-      ansible.builtin.set_fact:
-        k8s_cert_key: "{{ cert_key_output.stdout | regex_search('\\b[0-9a-f]{64}\\b') }}"
-
-    - name: Create new token for joining nodes
-      ansible.builtin.command: kubeadm token create
-      register: kube_token
+    - name: Wait for core DNS and CNI pods to be ready
+      # This task is succeeding and does not need modification.
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready pod -l k8s-app=kube-dns -n kube-system --timeout=300s
       delegate_to: node1
       run_once: true
 
-    # --- STEP 1: Create Local Variables (for this playbook) ---
-    - name: Generate Join Commands as Facts
-      ansible.builtin.set_fact:
-        k8s_control_plane_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }} --control-plane --certificate-key {{ k8s_cert_key }}"
-        k8s_worker_join_command: "kubeadm join {{ control_plane_endpoint }} --token {{ kube_token.stdout }} --discovery-token-ca-cert-hash sha256:{{ kubeadm_init_result.stdout | regex_search('sha256:[0-9a-f]+') | default('HASH_NOT_FOUND') }}"
+    - name: Join remaining control plane nodes (node2, node3)
+      # --- CRITICAL FIX: Added retries to handle API server instability ---
+      ansible.builtin.command: "{{ hostvars['node1']['k8s_control_plane_join_command'] }}"
+      when:
+        - inventory_hostname != 'node1'
+      register: join_result
+      changed_when: join_result.rc == 0
+      # Retry up to 10 times with 10s delay (nearly 2 mins of waiting)
+      retries: 10
+      delay: 10
+      until: join_result.rc == 0
+      
+    - name: Ensure all worker nodes (including masters) are joinable
+      # This task ensures the nodes have the correct labels/setup as workers
+      ansible.builtin.command: "{{ hostvars['node1']['k8s_worker_join_command'] }}"
+      when:
+        - hostvars['node1']['k8s_worker_join_command'] is defined
+        - inventory_hostname in groups['k8s_workers']
+      register: worker_join_result
+      changed_when: worker_join_result.rc == 0
+      ignore_errors: yes # Ignore if already joined
 
-    # --- STEP 2: Persist Variables (for the NEXT playbook in workflow) ---
-    - name: Persist Join Commands to Workflow Stats
-      ansible.builtin.set_stats:
-        data:
-          k8s_control_plane_join_command: "{{ k8s_control_plane_join_command }}"
-          k8s_worker_join_command: "{{ k8s_worker_join_command }}"
-
-    # --- STEP 3: Debug (Uses the variables from Step 1) ---
-    - name: Print Join Commands (for verification)
-      ansible.builtin.debug:
-        msg: |
-          Control Plane Join Command: {{ k8s_control_plane_join_command }}
-          Worker Join Command: {{ k8s_worker_join_command }}
-
-  handlers:
-    - name: Restart Kubelet
-      ansible.builtin.service:
-        name: kubelet
-        state: restarted
+    - name: Wait for all nodes to be Ready
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait --for=condition=Ready node/{{ inventory_hostname }} --timeout=300s
+      delegate_to: node1
+      run_once: true
