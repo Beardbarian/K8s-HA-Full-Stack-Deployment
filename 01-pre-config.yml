@@ -8,31 +8,33 @@
     ceph_osd_disk: /dev/sda # Target disk for Ceph OSDs on all nodes
 
   tasks:
-    # --- CRITICAL FIX: Add host entries to /etc/hosts on all nodes ---
     - name: Ensure all nodes can resolve each other by IP and hostname
       ansible.builtin.lineinfile:
         path: /etc/hosts
         line: "{{ hostvars[item].ansible_host }} {{ item }}"
         state: present
-      # Use the 'all' group to iterate over all hosts in the inventory
       loop: "{{ groups['all'] }}"
       loop_control:
         label: "{{ item }}"
-      # --- END CRITICAL FIX ---
 
     - name: "Wipe partition table on {{ ceph_osd_disk }} (Unconditional Cleanup)"
-      # This task runs on all nodes to ensure /dev/sda is clean for Ceph.
       ansible.builtin.command: sgdisk --zap-all {{ ceph_osd_disk }}
       register: disk_wipe_result
       changed_when: disk_wipe_result.rc == 0
-      # --- CRITICAL CHANGE: Run unconditionally on all nodes and ignore errors ---
       ignore_errors: yes
       
-    - name: Ensure OS is up-to-date
+    - name: Ensure OS packages are up-to-date
       ansible.builtin.dnf:
         name: "*"
         state: latest
         update_cache: yes
+
+    # --- CRITICAL FIX: Install Python Kubernetes library for Ansible modules ---
+    - name: Install Python Kubernetes library (Required for community.kubernetes modules)
+      ansible.builtin.dnf:
+        name: python3-kubernetes
+        state: present
+    # ---------------------------------------------------------------------------
 
     - name: Disable swap permanently (fstab)
       ansible.posix.mount:
