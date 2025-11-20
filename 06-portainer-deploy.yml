@@ -5,7 +5,7 @@
   gather_facts: no
   vars:
     portainer_namespace: portainer
-    storage_class_name: rook-ceph-block # Must match the StorageClass created by Rook
+    storage_class_name: rook-ceph-block
 
   tasks:
     - name: Add Helm repository for Portainer
@@ -14,11 +14,13 @@
         repo_url: https://portainer.github.io/k8s/
         state: present
 
-    - name: Update Helm repositories
+    - name: Update Helm repositories (Force Refresh)
       kubernetes.core.helm_repository:
         name: portainer
         repo_url: https://portainer.github.io/k8s/
-        state: update
+        state: present
+        force_update: yes
+      # This ensures we have the latest charts
 
     - name: Install Portainer using Helm
       kubernetes.core.helm:
@@ -29,7 +31,7 @@
         state: present
         values:
           service:
-            type: NodePort # Exposes Portainer on a high port (30000-32767) on all nodes
+            type: NodePort
           tls:
             force: true
           persistence:
