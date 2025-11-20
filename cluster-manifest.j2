@@ -23,12 +23,7 @@ spec:
           operator: Exists
           effect: NoSchedule
   storage:
-    useAllNodes: {{ ceph_use_all_nodes }}
-    useAllDevices: {{ ceph_use_all_devices }}
-    deviceFilter: "" # Use all devices if 'useAllDevices' is true
-    config:
-      # If your nodes are hybrid (master/worker), you must tolerate the taints.
-      monDevicePath: "/dev/disk/by-id/your-mon-device" # Replace with actual path if dedicated disk used for mon
-      # Only use if you have specific disks you want to dedicate:
-      # devices:
-      # - name: "/dev/sdb"
+    useAllNodes: true
+    useAllDevices: true
+    # deviceFilter: ""
+    config: {}
