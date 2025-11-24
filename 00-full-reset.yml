@@ -4,17 +4,17 @@
   become: true
   tasks:
   
-    - name: Stop Kubernetes Services
+    - name: Stop Kubernetes and Runtime Services
       service:
         name: "{{ item }}"
         state: stopped
       loop:
         - kubelet
-        - containerd
+        - crio
       ignore_errors: true
 
-    - name: Reset kubeadm (Force)
-      command: kubeadm reset -f
+    - name: Reset kubeadm (Force with CRI-O socket)
+      command: kubeadm reset -f --cri-socket unix:///var/run/crio/crio.sock
       ignore_errors: true
 
     - name: Remove Kubernetes and CNI Configuration Directories
@@ -31,14 +31,13 @@
         - /var/run/kubernetes
         - /var/lib/cni
         - /var/lib/calico
+        - /var/lib/crio
 
     - name: Nuke Rook-Ceph Data Directory
       file:
         path: /var/lib/rook
         state: absent
 
-    # OPTIONAL: If you used raw disks (like /dev/sdb), uncomment these lines.
-    # WARNING: This destroys ALL DATA on the specified disk.
     - name: Zap Ceph OSD Disk Headers (Optional - For Raw Disks)
       shell: |
        sgdisk --zap-all /dev/sda
@@ -60,9 +59,9 @@
         - dummy0
       ignore_errors: true
 
-    - name: Restart Containerd
+    - name: Restart CRI-O
       service:
-        name: containerd
+        name: crio
         state: started
         enabled: yes
       ignore_errors: true
