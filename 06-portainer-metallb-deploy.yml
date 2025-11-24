@@ -74,3 +74,25 @@
             edgePort: 8000
           tls:
             force: false
+            
+    - name: Get Portainer Service Info
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: portainer
+        namespace: portainer
+      register: portainer_svc
+      until: portainer_svc.resources[0].status.loadBalancer.ingress is defined
+      retries: 10
+      delay: 5
+
+    - name: Display Portainer Login URL
+      debug:
+        msg: 
+          - "========================================================"
+          - "DEPLOYMENT SUCCESSFUL!"
+          - "Go here immediately to set your admin password:"
+          - "https://{{ portainer_svc.resources[0].status.loadBalancer.ingress[0].ip }}"
+          - "========================================================"
+          - "NOTE: You have 5 minutes to set the password."
+          - "If you get a 'timeout' error, run: kubectl rollout restart deploy portainer -n portainer"
