@@ -3,9 +3,6 @@
   hosts: master_node
   become: true
   tasks:
-    # -----------------------------------------------------------------------
-    # 1. KUBE-PROXY CONFIGURATION (Required for MetalLB ARP)
-    # -----------------------------------------------------------------------
     - name: Enable strictARP in kube-proxy (Required for MetalLB)
       shell: |
         kubectl get configmap kube-proxy -n kube-system -o yaml | \
@@ -13,10 +10,7 @@
         kubectl apply -f - -n kube-system
       register: strict_arp_patch
       changed_when: "'configured' in strict_arp_patch.stdout"
-
-    # -----------------------------------------------------------------------
-    # 2. METALLB DEPLOYMENT
-    # -----------------------------------------------------------------------
+      
     - name: Add MetalLB Helm repository
       kubernetes.core.helm_repository:
         name: metallb
@@ -32,10 +26,7 @@
         values:
           speaker:
             tolerateMaster: true
-
-    # -----------------------------------------------------------------------
-    # 3. METALLB L2 CONFIGURATION (Explicit Interfaces)
-    # -----------------------------------------------------------------------
+            
     - name: Apply MetalLB IP Pool and Interface Config
       kubernetes.core.k8s:
         state: present
@@ -61,10 +52,7 @@
               interfaces:
                 - eno1
                 - eno2
-
-    # -----------------------------------------------------------------------
-    # 4. PORTAINER DEPLOYMENT (Local Policy & Standard Ports)
-    # -----------------------------------------------------------------------
+                
     - name: Add Portainer Helm repository
       kubernetes.core.helm_repository:
         name: portainer
