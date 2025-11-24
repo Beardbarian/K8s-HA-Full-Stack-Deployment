@@ -1,0 +1,108 @@
+---
+- name: 06 - Deploy MetalLB and Portainer
+  hosts: node1
+  become: no
+  gather_facts: no
+  vars:
+    # --- Configuration Variables ---
+    metallb_namespace: metallb-system
+    # Based on your node IP (10.6.4.120), we assume this subnet.
+    metallb_ip_range: "10.6.4.150-10.6.4.200" 
+    
+    portainer_namespace: portainer
+    storage_class_name: rook-ceph-block
+    # This must be inside the range defined above
+    portainer_ip: "10.6.4.150" 
+
+  tasks:
+    # ==============================================================================
+    # SECTION 1: METALLB INSTALLATION (Infrastructure)
+    # ==============================================================================
+    
+    - name: Add MetalLB Helm repository
+      kubernetes.core.helm_repository:
+        name: metallb
+        repo_url: https://metallb.github.io/metallb
+        state: present
+
+    - name: Install MetalLB using Helm
+      kubernetes.core.helm:
+        name: metallb
+        chart_ref: metallb/metallb
+        release_namespace: "{{ metallb_namespace }}"
+        create_namespace: yes
+        state: present
+        wait: yes # Critical: Wait for the controller to be ready before adding configs
+        values:
+          speaker:
+            frr:
+              enabled: false # We are using Layer 2 (ARP), so we don't need BGP/FRR
+
+    - name: Configure MetalLB IP Address Pool (Layer 2)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: first-pool
+            namespace: "{{ metallb_namespace }}"
+          spec:
+            addresses:
+              - "{{ metallb_ip_range }}"
+
+    - name: Configure MetalLB L2 Advertisement
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: example
+            namespace: "{{ metallb_namespace }}"
+          spec:
+            ipAddressPools:
+              - first-pool
+
+    # ==============================================================================
+    # SECTION 2: PORTAINER INSTALLATION (Application)
+    # ==============================================================================
+
+    - name: Add Portainer Helm repository
+      kubernetes.core.helm_repository:
+        name: portainer
+        repo_url: https://portainer.github.io/k8s/
+        state: present
+
+    - name: Update Helm repositories
+      kubernetes.core.helm_repository:
+        name: portainer
+        repo_url: https://portainer.github.io/k8s/
+        state: present
+        force_update: yes
+
+    - name: Install Portainer using Helm
+      kubernetes.core.helm:
+        name: portainer
+        chart_ref: portainer/portainer
+        release_namespace: "{{ portainer_namespace }}"
+        create_namespace: yes
+        state: present
+        values:
+          replicaCount: 1
+          strategy:
+            type: Recreate
+          service:
+            type: LoadBalancer
+            annotations:
+              metallb.io/loadBalancerIPs: "{{ portainer_ip }}"
+          tls:
+            force: true
+          persistence:
+            enabled: true
+            storageClass: "{{ storage_class_name }}"
+            size: 10Gi
+
+    - name: Display Portainer Access URL
+      ansible.builtin.debug:
+        msg: "Success! Portainer is accessible at: https://{{ portainer_ip }}:9443"
