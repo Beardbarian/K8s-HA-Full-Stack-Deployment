@@ -1,0 +1,72 @@
+---
+- name: 00 - Nuclear Reset of Kubernetes Cluster (Data Destruction)
+  hosts: all
+  become: true
+  tasks:
+  
+    - name: Stop Kubernetes Services
+      service:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - kubelet
+        - containerd
+      ignore_errors: true
+
+    - name: Reset kubeadm (Force)
+      command: kubeadm reset -f
+      ignore_errors: true
+
+    - name: Remove Kubernetes and CNI Configuration Directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/cni/net.d
+        - /etc/kubernetes
+        - /root/.kube
+        - /var/lib/etcd
+        - /var/lib/kubelet
+        - /var/lib/dockershim
+        - /var/run/kubernetes
+        - /var/lib/cni
+        - /var/lib/calico
+
+    - name: Nuke Rook-Ceph Data Directory
+      file:
+        path: /var/lib/rook
+        state: absent
+
+    # OPTIONAL: If you used raw disks (like /dev/sdb), uncomment these lines.
+    # WARNING: This destroys ALL DATA on the specified disk.
+    - name: Zap Ceph OSD Disk Headers (Optional - For Raw Disks)
+      shell: |
+       sgdisk --zap-all /dev/sda
+        wipefs -a /dev/sda
+      ignore_errors: true
+
+    - name: Flush IPTables and IPVS
+      shell: |
+        iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
+        ipvsadm -C || true
+      ignore_errors: true
+
+    - name: Delete CNI Network Interfaces
+      shell: ip link delete {{ item }}
+      loop:
+        - cni0
+        - flannel.1
+        - kube-ipvs0
+        - dummy0
+      ignore_errors: true
+
+    - name: Restart Containerd
+      service:
+        name: containerd
+        state: started
+        enabled: yes
+      ignore_errors: true
+
+    - name: Reboot Node to Finalize Cleanup
+      reboot:
+        reboot_timeout: 300
