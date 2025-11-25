@@ -1,6 +1,6 @@
 ---
 - name: 06 - Deploy MetalLB and Portainer
-  hosts: master_node
+  hosts: node1
   become: true
   tasks:
     - name: Enable strictARP in kube-proxy (Required for MetalLB)
