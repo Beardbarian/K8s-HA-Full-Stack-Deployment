@@ -2,9 +2,15 @@
 - name: 06 - Deploy MetalLB and Portainer
   hosts: node1
   become: true
+  vars:
+    # Define the location of the admin config for all tasks to use
+    k8s_config: /etc/kubernetes/admin.conf
+
   tasks:
     - name: Enable strictARP in kube-proxy (Required for MetalLB)
       shell: |
+        # Explicitly set KUBECONFIG for this shell session
+        export KUBECONFIG={{ k8s_config }}
         kubectl get configmap kube-proxy -n kube-system -o yaml | \
         sed -e "s/strictARP: false/strictARP: true/" | \
         kubectl apply -f - -n kube-system
@@ -23,6 +29,7 @@
         release_namespace: metallb-system
         create_namespace: true
         wait: true
+        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
         values:
           speaker:
             tolerateMaster: true
@@ -30,6 +37,7 @@
     - name: Apply MetalLB IP Pool and Interface Config
       kubernetes.core.k8s:
         state: present
+        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
         definition:
           - apiVersion: metallb.io/v1beta1
             kind: IPAddressPool
@@ -65,6 +73,7 @@
         release_namespace: portainer
         create_namespace: true
         wait: true
+        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
         values:
           service:
             type: LoadBalancer
@@ -81,6 +90,7 @@
         kind: Service
         name: portainer
         namespace: portainer
+        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
       register: portainer_svc
       until: portainer_svc.resources[0].status.loadBalancer.ingress is defined
       retries: 10
@@ -95,4 +105,4 @@
           - "https://{{ portainer_svc.resources[0].status.loadBalancer.ingress[0].ip }}"
           - "========================================================"
           - "NOTE: You have 5 minutes to set the password."
-          - "If you get a 'timeout' error, run: kubectl rollout restart deploy portainer -n portainer"
+          - "If you get a 'timeout' error, run: kubectl --kubeconfig /etc/kubernetes/admin.conf rollout restart deploy portainer -n portainer"
