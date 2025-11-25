@@ -29,15 +29,26 @@
         release_namespace: metallb-system
         create_namespace: true
         wait: true
-        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
+        timeout: "10m0s"
+        kubeconfig: "{{ k8s_config }}"
         values:
+          # Allow the Controller (the brain) to run on Master nodes
+          controller:
+            tolerations:
+              - key: "node-role.kubernetes.io/control-plane"
+                operator: "Exists"
+                effect: "NoSchedule"
+              - key: "node-role.kubernetes.io/master"
+                operator: "Exists"
+                effect: "NoSchedule"
+          # Allow the Speakers (the announcers) to run on Master nodes
           speaker:
             tolerateMaster: true
             
     - name: Apply MetalLB IP Pool and Interface Config
       kubernetes.core.k8s:
         state: present
-        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
+        kubeconfig: "{{ k8s_config }}"
         definition:
           - apiVersion: metallb.io/v1beta1
             kind: IPAddressPool
@@ -73,28 +84,42 @@
         release_namespace: portainer
         create_namespace: true
         wait: true
-        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
+        timeout: "10m0s"
+        kubeconfig: "{{ k8s_config }}"
         values:
           service:
             type: LoadBalancer
+            # We attempt to set this here, but the explicit task below guarantees it
             externalTrafficPolicy: Local
-            httpPort: 80
-            httpsPort: 443
-            edgePort: 8000
           tls:
             force: false
           persistence:
             enabled: true
             storageClass: "rook-ceph-block"
             size: "20Gi"
-            
+
+    # --- NEW TASK: GUARANTEE LOCAL TRAFFIC POLICY ---
+    # This automates the manual "kubectl patch" command you ran earlier.
+    - name: Force 'Local' Traffic Policy on Portainer Service
+      kubernetes.core.k8s:
+        kubeconfig: "{{ k8s_config }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: portainer
+            namespace: portainer
+          spec:
+            externalTrafficPolicy: Local
+
     - name: Get Portainer Service Info
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Service
         name: portainer
         namespace: portainer
-        kubeconfig: "{{ k8s_config }}"  # <--- Added Explicit Config
+        kubeconfig: "{{ k8s_config }}"
       register: portainer_svc
       until: portainer_svc.resources[0].status.loadBalancer.ingress is defined
       retries: 10
@@ -106,7 +131,7 @@
           - "========================================================"
           - "DEPLOYMENT SUCCESSFUL!"
           - "Go here immediately to set your admin password:"
-          - "https://{{ portainer_svc.resources[0].status.loadBalancer.ingress[0].ip }}"
+          - "https://{{ portainer_svc.resources[0].status.loadBalancer.ingress[0].ip }}:9443"
           - "========================================================"
           - "NOTE: You have 5 minutes to set the password."
           - "If you get a 'timeout' error, run: kubectl --kubeconfig /etc/kubernetes/admin.conf rollout restart deploy portainer -n portainer"
