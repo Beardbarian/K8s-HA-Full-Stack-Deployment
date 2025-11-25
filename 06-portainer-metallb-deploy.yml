@@ -83,6 +83,10 @@
             edgePort: 8000
           tls:
             force: false
+          persistence:
+            enabled: true
+            storageClass: "rook-ceph-block"
+            size: "20Gi"
             
     - name: Get Portainer Service Info
       kubernetes.core.k8s_info:
