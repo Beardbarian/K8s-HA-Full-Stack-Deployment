@@ -54,6 +54,13 @@
       register: helm_install
       changed_when: "'Helm installed' in helm_install.stdout"
 
+    - name: Create Symlink for Helm (Fix Sudo Path Issue)
+      file:
+        src: /usr/local/bin/helm
+        dest: /usr/bin/helm
+        state: link
+        force: yes
+
     - name: Disable swap in memory (immediate)
       ansible.builtin.command: swapoff -a
       when: ansible_swaptotal_mb > 0
