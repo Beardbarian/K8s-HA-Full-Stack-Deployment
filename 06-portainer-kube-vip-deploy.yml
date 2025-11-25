@@ -1,40 +1,21 @@
 ---
-- name: 06 - Deploy Kube-VIP and Portainer (Replacing MetalLB)
+- name: 06 - Deploy Kube-VIP and Portainer
   hosts: node1
   become: true
   vars:
     k8s_config: /etc/kubernetes/admin.conf
-    # Kube-VIP Version
     kv_version: "v0.8.0"
-    # Kube-VIP Cloud Provider Version
-    kv_cp_version: "v0.0.10"
-    # Your LoadBalancer Range
     vip_range: "10.6.4.150-10.6.4.200"
 
   tasks:
-    # -----------------------------------------------------------------------
-    # 1. CLEANUP: REMOVE METALLB (Scorched Earth)
-    # -----------------------------------------------------------------------
-    - name: Uninstall MetalLB Helm Chart
-      kubernetes.core.helm:
-        name: metallb
-        release_namespace: metallb-system
-        state: absent
-        kubeconfig: "{{ k8s_config }}"
+    - name: Ensure Helm is in the System Path
+      file:
+        src: /usr/local/bin/helm
+        dest: /usr/bin/helm
+        state: link
+        force: yes
       ignore_errors: yes
 
-    - name: Delete MetalLB Namespace and Residuals
-      kubernetes.core.k8s:
-        name: metallb-system
-        api_version: v1
-        kind: Namespace
-        state: absent
-        kubeconfig: "{{ k8s_config }}"
-      ignore_errors: yes
-
-    # -----------------------------------------------------------------------
-    # 2. PRE-REQ: KUBE-PROXY STRICT ARP (Still Required for Kube-VIP)
-    # -----------------------------------------------------------------------
     - name: Enable strictARP in kube-proxy
       shell: |
         export KUBECONFIG={{ k8s_config }}
@@ -44,10 +25,7 @@
       register: strict_arp_patch
       changed_when: "'configured' in strict_arp_patch.stdout"
 
-    # -----------------------------------------------------------------------
-    # 3. KUBE-VIP: RBAC & IP CONFIGURATION
-    # -----------------------------------------------------------------------
-    - name: Apply Kube-VIP RBAC
+    - name: Apply Kube-VIP RBAC Manifest
       kubernetes.core.k8s:
         state: present
         src: https://kube-vip.io/manifests/rbac.yaml
@@ -66,18 +44,12 @@
           data:
             range-global: "{{ vip_range }}"
 
-    # -----------------------------------------------------------------------
-    # 4. KUBE-VIP: CLOUD PROVIDER (The "Controller" that assigns IPs)
-    # -----------------------------------------------------------------------
     - name: Apply Kube-VIP Cloud Provider
       kubernetes.core.k8s:
         state: present
         src: "https://raw.githubusercontent.com/kube-vip/kube-vip-cloud-provider/main/manifest/kube-vip-cloud-controller.yaml"
         kubeconfig: "{{ k8s_config }}"
 
-    # -----------------------------------------------------------------------
-    # 5. KUBE-VIP: DAEMONSET (The "Speaker" that handles Traffic)
-    # -----------------------------------------------------------------------
     - name: Deploy Kube-VIP DaemonSet
       kubernetes.core.k8s:
         state: present
@@ -123,16 +95,16 @@
                   env:
                   - name: vip_arp
                     value: "true"
-                  # This enables Service LoadBalancing
                   - name: svc_enable
                     value: "true"
-                  # Leaving interface empty = Auto-Detect Default Route (Fixes your Eno1/Eno2 issue)
+
                   - name: vip_interface
-                    value: ""
+                    value: "" 
+                    
                   - name: vip_cidr
                     value: "32"
                   - name: cp_enable
-                    value: "false"  # Set to true if you want a Control Plane VIP later
+                    value: "false"
                   - name: cp_namespace
                     value: kube-system
                   securityContext:
@@ -141,16 +113,11 @@
                       - NET_ADMIN
                       - NET_RAW
 
-    # -----------------------------------------------------------------------
-    # 6. PORTAINER DEPLOYMENT
-    # -----------------------------------------------------------------------
     - name: Add Portainer Helm repository
       kubernetes.core.helm_repository:
         name: portainer
         repo_url: https://portainer.github.io/k8s/
 
-    # Note: Kube-VIP works best with "Cluster" traffic policy (Default)
-    # We do not need "Local" anymore because Kube-VIP handles routing differently
     - name: Install Portainer using Helm
       kubernetes.core.helm:
         name: portainer
@@ -163,9 +130,9 @@
         values:
           service:
             type: LoadBalancer
-            # Kube-VIP handles Cluster routing fine, but Local saves bandwidth. 
-            # We'll stick to Cluster for maximum compatibility first.
             externalTrafficPolicy: Cluster
+            httpPort: 9000
+            httpsPort: 9443
           tls:
             force: false
           persistence:
@@ -189,7 +156,7 @@
       debug:
         msg: 
           - "========================================================"
-          - "KUBE-VIP DEPLOYMENT SUCCESSFUL!"
+          - "KUBE-VIP & PORTAINER DEPLOYMENT SUCCESSFUL!"
           - "Go here immediately to set your admin password:"
           - "https://{{ portainer_svc.resources[0].status.loadBalancer.ingress[0].ip }}:9443"
           - "========================================================"
